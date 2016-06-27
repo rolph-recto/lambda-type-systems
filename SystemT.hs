@@ -84,7 +84,7 @@ inferType ctx t = case t of
 
   Iter n x body -> do
     nty <- inferType ctx n
-    inferType (x:ctx) body
+    if nty = TNum then inferType (x:ctx) body else Nothing
 
   Annot t' ty -> do
     ty' <- inferType ctx t'
