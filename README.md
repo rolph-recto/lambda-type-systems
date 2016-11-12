@@ -1,10 +1,11 @@
-## Type Systems
+## Lambda Calculi and Type Systems
 
-Implementations of various type systems, mostly from Harper's PFPL. Including:
+Implementations of various lambda calculi type systems, mostly from Harper's PFPL. Including:
 
 Done
 
 * Goedel's System T (Simply Typed Lambda Calculus)
+* Language with a control stack and call-cc
 
 Todo:
 
