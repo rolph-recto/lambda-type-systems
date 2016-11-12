@@ -1,6 +1,6 @@
 ## Lambda Calculi and Type Systems
 
-Implementations of various lambda calculi type systems, mostly from Harper's PFPL. Including:
+Implementations of various lambda calculi and type systems, mostly from Harper's PFPL. Including:
 
 Done
 
