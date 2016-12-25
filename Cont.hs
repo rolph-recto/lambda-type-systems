@@ -8,16 +8,27 @@ import Control.Monad.Reader
 import qualified Data.Map.Strict as M
 
 data Expr   = ILit Int
+            | BLit Bool
             | Var Int
             | Plus Expr Expr
+            | Cond Expr Expr Expr
             | Lam Int Expr
             | App Expr Expr
+            | Unit
             | CallCC Int Expr
+            -- commands
+            | Print Expr
+            | Seq [Expr]
             deriving (Show)
 
-type Cont   = Expr -> Expr
-type Stack  = [Cont]
 type Env    = M.Map Int Expr
+type Cont   = Expr -> Expr
+
+-- stack should be a list of conts but also an environment
+-- we should be able to recreate the current continuation,
+-- which is a closure, from the stack
+-- type Stack  = (Env, [Cont])
+data InterpState = InterpState Env [Cont]
 
 isValue :: Expr -> Bool
 isValue expr = case expr of
@@ -25,9 +36,20 @@ isValue expr = case expr of
   Var _ -> True
   Lam _ _ -> True
   App _ _ -> False
+  Unit -> True
   CallCC _ _ -> False
+  Print _ -> False
+  Seq _ -> False
 
-eval :: Expr -> ExceptT String (ReaderT Env (State Stack)) Expr
+type InterpM a = ExceptT String (ReaderT Env (StateT InterpState IO)) a
+
+pushToStack :: Cont -> InterpM ()
+pushToStack cont = do
+  InterpState _ st <- get
+  env <- ask
+  put $ InterpState env (cont:st)
+
+eval :: Expr -> InterpM Expr
 eval expr
   | ILit n <- expr = ret expr
 
@@ -35,30 +57,39 @@ eval expr
     env <- ask
     case M.lookup v env of
       Nothing -> throwError $ "unexpected free variable: v" ++ (show v)
-      Just val -> ret val
+      Just val -> eval val
 
-  | Lam param body <- expr = ret expr
+  | Lam param body <- expr = do
+      ret expr
 
+  | Unit <- expr = do
+      ret expr
+
+  -- eager evaluation
   | App (Lam var body) arg <- expr, isValue arg = do
     local (M.insert var arg) (eval body)
 
   | App (Lam var body) arg <- expr, not (isValue arg) = do
-    let appcont carg = App (Lam var body) carg
-    st <- get
-    put (appcont:st)
+    pushToStack $ App (Lam var body)
     eval arg
+
+  | App func arg <- expr = do
+    env <- ask
+    let cont f = App f arg
+    pushToStack cont
+    eval func
 
   | CallCC k body <- expr = do
     -- reify the current continuation into a function
-    st <- get 
+    InterpState env st <- get 
     let contf = foldr (.) id st
     let cont = Lam (-1) (contf (Var (-1)))
 
     -- smash the control stack
-    put []
+    put $ InterpState M.empty []
 
     -- evaluate the body
-    local (M.insert k cont) (eval body)
+    local (M.insert k cont . const env) (eval body)
 
   -- only intgers are allowed as direct arguments to plus;
   -- e.g. instead of writing Plus 2 (Plus 3 4) you should write
@@ -81,18 +112,36 @@ eval expr
       Just (ILit xval) -> eval (Plus (ILit xval) (Var y))
       otherwise -> throwError "expected integer argument to Plus"
 
-ret :: Expr -> ExceptT String (ReaderT Env (State Stack)) Expr
+  | Print pexpr <- expr, isValue pexpr = do
+      liftIO $ print pexpr
+      ret Unit
+
+  | Print pexpr <- expr, not (isValue pexpr) = do
+      pushToStack Print
+      eval pexpr
+
+  | Seq (cmd:tlcmds) <- expr = do
+      InterpState _ st <- get
+      pushToStack $ const (Seq tlcmds)
+      eval cmd
+
+  | Seq [] <- expr = do
+      InterpState _ st <- get
+      ret Unit
+
+ret :: Expr -> InterpM Expr
 ret expr = do
-  st <- get
+  InterpState env st <- get
   case st of
     [] -> return expr
     (c:cs) -> do
-      put cs
+      put $ InterpState env cs
       eval (c expr)
 
 main = do
-  let expr = App (Lam 0 (Plus (ILit 2) (Var 0))) (CallCC 0 (ILit 10))
-  let res = evalState (runReaderT (runExceptT (eval expr)) M.empty) []
+  let expr = Seq [CallCC 0 (Seq [App (Var 0) Unit, App (Var 0) Unit, Print (ILit 98)]), Print (ILit 99)]
+  let initState = InterpState M.empty []
+  res <- evalStateT (runReaderT (runExceptT (eval expr)) M.empty) initState
   case res of
     Left err -> putStrLn err
     Right rval -> print rval
